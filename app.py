@@ -274,8 +274,6 @@ def render_intraday_live():
         st.warning("この期間の分足データは取得できませんでした。期間や足種を変更してお試しください。")
     else:
         last_intraday=intraday.iloc[-1]
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
         checked_at=datetime.now(ZoneInfo("Asia/Tokyo"))
         data_lag=(checked_at-intraday.index[-1].to_pydatetime()).total_seconds()/60
         st.caption(f"取得確認：{checked_at:%Y/%m/%d %H:%M:%S} JST｜データの最終足：{intraday.index[-1]:%H:%M} JST｜足の開始から約{max(0,data_lag):.0f}分")
