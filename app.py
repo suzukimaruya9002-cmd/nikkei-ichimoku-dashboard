@@ -272,4 +272,26 @@ else:
     st.caption("価格到達時刻は足の開始時刻です。足の中で実際に約定した秒・分までは特定できません。5分足なら最大5分、15分足なら最大15分の幅があります。")
     st.caption("指定価格を含む足はOHLCの範囲判定です。ギャップや気配・データ欠損などで実際の取引成立を保証しません。")
     st.download_button("分足CSV（JST）を保存",intraday.to_csv(index_label="JST").encode("utf-8-sig"),file_name=f"nikkei_{interval_code}_jst.csv",mime="text/csv")
-st.caption("分足データの取得可能期間は提供元の制約を受けます。過去データの永続保存・自動蓄積は未実装です。")
+st.caption("Yahoo Financeの直近分足に加え、GitHub Actionsによる1分足の継続保存を設定しています。保存は外部データの取得・ワークフロー実行状況に依存します。")
+
+from pathlib import Path
+archive_index = Path(__file__).parent / "data" / "daily_extrema.csv"
+st.subheader("蓄積した1分足データ")
+if archive_index.exists():
+    extrema = pd.read_csv(archive_index)
+    if not extrema.empty:
+        st.metric("保存済み営業日数", len(extrema))
+        st.caption(f"保存期間：{extrema.date_jst.iloc[0]} ～ {extrema.date_jst.iloc[-1]}")
+        st.dataframe(extrema.sort_values("date_jst", ascending=False), hide_index=True, use_container_width=True)
+        dates = extrema.date_jst.astype(str).tolist()
+        chosen = st.selectbox("保存済みの1分足を表示", list(reversed(dates)))
+        file = Path(__file__).parent / "data" / "1m" / f"{chosen}.csv"
+        if file.exists():
+            archived = pd.read_csv(file)
+            st.dataframe(archived.tail(500), hide_index=True, use_container_width=True)
+            st.download_button("保存済み1分足CSVをダウンロード", file.read_bytes(), file_name=f"nikkei_1m_{chosen}.csv", mime="text/csv")
+    else:
+        st.info("保存データはまだありません。")
+else:
+    st.info("保存データはまだありません。GitHub Actionsの初回実行後に表示されます。")
+st.caption("記録した高値・安値の時刻は1分足の開始時刻であり、約定の正確な秒数ではありません。")
