@@ -60,11 +60,11 @@ with st.container():
     with x2:
         period=st.selectbox("表示期間",["直近1か月","直近3か月","2026/6/22以降"],index=1)
     with st.expander("表示する線・追加設定",expanded=False):
-        show_tenkan=st.checkbox("転換線（黄）",True)
+        show_tenkan=st.checkbox("転換線（黄）",False)
         show_kijun=st.checkbox("基準線（水色）",True)
-        show_cloud=st.checkbox("雲（緑・赤）",True)
+        show_cloud=st.checkbox("雲（緑・赤）",False)
         show_chikou=st.checkbox("遅行スパン（紫）",False)
-        show_markers=st.checkbox("直近の高値・安値マーカー",True)
+        show_markers=st.checkbox("直近の高値・安値マーカー",False)
         if st.button("最新株価を再取得"):
             load_prices.clear()
             st.rerun()
@@ -90,9 +90,6 @@ m3.metric("基準線",f"{last.kijun:,.0f}")
 st.caption(f"データ最終日：{end:%Y/%m/%d}（{timeframe}）｜取引所の休場・配信遅延に注意")
 
 fig=go.Figure()
-fig.add_trace(go.Candlestick(x=v.index,open=v.Open,high=v.High,low=v.Low,close=v.Close,
-    name="日経平均",increasing_line_color="#00d34f",decreasing_line_color="#ff3b20",
-    increasing_fillcolor="#00d34f",decreasing_fillcolor="#ff3b20"))
 if show_cloud:
     # 26本先への雲投影。日足の未来日付は平日ベースで日本の祝日は未考慮。
     future=(pd.bdate_range(d.index[-1]+pd.offsets.BDay(1),periods=26)
@@ -106,15 +103,15 @@ if show_cloud:
     a.loc[future]=d.a_raw.tail(26).to_numpy()
     b.loc[future]=d.b_raw.tail(26).to_numpy()
     cx=cloud_dates[cloud_dates>=v.index[0]]
-    fig.add_trace(go.Scatter(x=cx,y=a.loc[cx],name="先行A",line=dict(color="#2db56a",width=1.2),
+    fig.add_trace(go.Scatter(x=cx,y=a.loc[cx],name="先行A",line=dict(color="rgba(45,181,106,.58)",width=1.0),
         hovertemplate="%{x|%Y/%m/%d}<br>先行A %{y:,.0f}<extra></extra>"))
-    fig.add_trace(go.Scatter(x=cx,y=b.loc[cx],name="先行B",line=dict(color="#f16c69",width=1.2),
-        fill="tonexty",fillcolor="rgba(43,170,98,.12)",
+    fig.add_trace(go.Scatter(x=cx,y=b.loc[cx],name="先行B",line=dict(color="rgba(241,108,105,.58)",width=1.0),
+        fill="tonexty",fillcolor="rgba(43,170,98,.045)",
         hovertemplate="%{x|%Y/%m/%d}<br>先行B %{y:,.0f}<extra></extra>"))
 if show_tenkan:
-    fig.add_trace(go.Scatter(x=v.index,y=v.tenkan,name="転換線",line=dict(color="#f9d000",width=2.1)))
+    fig.add_trace(go.Scatter(x=v.index,y=v.tenkan,name="転換線",line=dict(color="rgba(249,208,0,.82)",width=1.45)))
 if show_kijun:
-    fig.add_trace(go.Scatter(x=v.index,y=v.kijun,name="基準線",line=dict(color="#24c6cf",width=2.1)))
+    fig.add_trace(go.Scatter(x=v.index,y=v.kijun,name="基準線",line=dict(color="rgba(36,198,207,.82)",width=1.45)))
 if show_chikou:
     # 終値を26本前の日付にプロット（最新26本を含む）
     chikou_dates=d.index[:-26]
@@ -134,6 +131,11 @@ if show_markers:
 fig.add_hline(y=float(last.Close),line_color="#f5c400",line_width=1.3,line_dash="dash",opacity=.9,
     annotation_text=f"{last.Close:,.0f}",annotation_position="right",annotation_font_color="#f5c400")
 
+# ローソク足は最後に描画し、雲や線の手前に表示する。
+fig.add_trace(go.Candlestick(x=v.index,open=v.Open,high=v.High,low=v.Low,close=v.Close,
+    name="ローソク足",increasing_line_color="#00d34f",decreasing_line_color="#ff3b20",line=dict(width=1.3),
+    increasing_fillcolor="#00d34f",decreasing_fillcolor="#ff3b20"))
+
 fig.update_layout(
     template="plotly_dark",height=510,margin=dict(l=0,r=4,t=14,b=5),
     xaxis_rangeslider_visible=False,hovermode="x unified",
@@ -145,7 +147,7 @@ fig.update_layout(
     dragmode="pan")
 st.plotly_chart(fig,use_container_width=True,config={"displaylogo":False,"scrollZoom":False,
     "modeBarButtonsToRemove":["lasso2d","select2d","autoScale2d"]})
-st.caption("黄色の破線＝最新終値。チャートをタップすると日付と価格を確認できます。")
+st.caption("ローソク足を最前面に表示。雲・転換線・遅行スパンは「表示する線・追加設定」で切り替えられます。黄色の破線＝最新終値。")
 
 st.subheader("重要価格")
 high,low=st.columns(2)
