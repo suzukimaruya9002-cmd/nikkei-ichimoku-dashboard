@@ -209,7 +209,7 @@ intraday_period=st.selectbox("分足の取得期間",period_options[intraday_int
 interval_code={"1分足":"1m","5分足":"5m","15分足":"15m"}[intraday_interval]
 period_code={"直近1日":"1d","直近5日":"5d","直近1か月":"1mo"}[intraday_period]
 
-@st.cache_data(ttl=300,show_spinner=False)
+@st.cache_data(ttl=55,show_spinner=False)
 def load_intraday(interval,period):
     z=yf.download("^N225",period=period,interval=interval,auto_adjust=False,progress=False,multi_level_index=False,prepost=False)
     if z is None or z.empty:
@@ -223,67 +223,82 @@ def load_intraday(interval,period):
     z.index=idx
     return z
 
-with st.spinner("分足を取得しています"):
-    intraday=load_intraday(interval_code,period_code)
-if intraday.empty:
-    st.warning("この期間の分足データは取得できませんでした。期間や足種を変更してお試しください。")
-else:
-    last_intraday=intraday.iloc[-1]
-    st.caption(f"最終取得足：{intraday.index[-1]:%Y/%m/%d %H:%M} JST（足の開始時刻）｜配信遅延の可能性あり")
-    hidx=intraday.High.idxmax()
-    lidx=intraday.Low.idxmin()
-    cc1,cc2=st.columns(2)
-    cc1.metric("期間高値",f"{intraday.High.max():,.2f} 円")
-    cc1.caption(f"{hidx:%m/%d %H:%M} JST の足")
-    cc2.metric("期間安値",f"{intraday.Low.min():,.2f} 円")
-    cc2.caption(f"{lidx:%m/%d %H:%M} JST の足")
+st.toggle("分足チャートを1分ごとに自動更新",value=True,key="intraday_autorefresh",help="画面を開いている間、60秒ごとに分足の取得・チャート表示を更新します。データ配信の遅延は解消しません。")
+if st.button("分足データを今すぐ再取得",key="force_intraday_refresh"):
+    load_intraday.clear()
 
-    target=st.number_input("追跡する重要価格（円）",min_value=0.0,value=round(float(last.Close),2),step=10.0,format="%.2f",key="intraday_target")
-    touched=intraday[(intraday.Low<=target)&(intraday.High>=target)]
-    above_target=intraday[intraday.High>=target]
-    below_target=intraday[intraday.Low<=target]
-    event_rows=[]
-    for label,frame in [("指定価格を含む足（初回）",touched),("指定価格以上の高値（初回）",above_target),("指定価格以下の安値（初回）",below_target)]:
-        if not frame.empty:
-            ix=frame.index[0]
-            event_rows.append({"条件":label,"日時（JST・足開始）":ix.strftime("%Y/%m/%d %H:%M"),"安値":f"{frame.iloc[0].Low:,.2f}","高値":f"{frame.iloc[0].High:,.2f}"})
-    if event_rows:
-        st.dataframe(pd.DataFrame(event_rows),hide_index=True,use_container_width=True)
+@st.fragment(run_every="60s" if st.session_state.intraday_autorefresh else None)
+def render_intraday_live():
+    with st.spinner("分足を取得しています"):
+        intraday=load_intraday(interval_code,period_code)
+    if intraday.empty:
+        st.warning("この期間の分足データは取得できませんでした。期間や足種を変更してお試しください。")
     else:
-        st.info("取得期間中に指定価格へ到達した足はありません。")
+        last_intraday=intraday.iloc[-1]
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        checked_at=datetime.now(ZoneInfo("Asia/Tokyo"))
+        data_lag=(checked_at-intraday.index[-1].to_pydatetime()).total_seconds()/60
+        st.caption(f"取得確認：{checked_at:%Y/%m/%d %H:%M:%S} JST｜データの最終足：{intraday.index[-1]:%H:%M} JST｜足の開始から約{max(0,data_lag):.0f}分")
+        if data_lag>20:
+            st.warning("取得した価格データが20分以上前のものです。リアルタイム価格として利用しないでください。")
+        st.caption(f"最終取得足：{intraday.index[-1]:%Y/%m/%d %H:%M} JST（足の開始時刻）｜配信遅延の可能性あり")
+        hidx=intraday.High.idxmax()
+        lidx=intraday.Low.idxmin()
+        cc1,cc2=st.columns(2)
+        cc1.metric("期間高値",f"{intraday.High.max():,.2f} 円")
+        cc1.caption(f"{hidx:%m/%d %H:%M} JST の足")
+        cc2.metric("期間安値",f"{intraday.Low.min():,.2f} 円")
+        cc2.caption(f"{lidx:%m/%d %H:%M} JST の足")
 
-    # Plot only one selected trading session by default, eliminating large overnight/weekend gaps.
-    available_days=sorted(intraday.index.strftime("%Y-%m-%d").unique(),reverse=True)
-    selected_day=st.selectbox("チャート表示日",available_days,index=0,key="intraday_chart_day")
-    chart_bars=intraday[intraday.index.strftime("%Y-%m-%d")==selected_day]
-    st.caption(f"表示：{selected_day}｜{len(chart_bars)}本のローソク足。過去の高値・安値集計は選択した取得期間全体を対象とします。")
-    show_intraday_ichimoku=st.checkbox("分足の一目均衡表（9・26・52）を表示",False)
-    intraday_fig=go.Figure()
-    if show_intraday_ichimoku:
-        idata=calc(intraday).loc[chart_bars.index]
-        intraday_fig.add_trace(go.Scatter(x=idata.index,y=idata.tenkan,name="分足転換線",line=dict(color="rgba(249,208,0,.75)",width=1.3)))
-        intraday_fig.add_trace(go.Scatter(x=idata.index,y=idata.kijun,name="分足基準線",line=dict(color="rgba(36,198,207,.75)",width=1.3)))
-    intraday_fig.add_trace(go.Candlestick(x=chart_bars.index,open=chart_bars.Open,high=chart_bars.High,low=chart_bars.Low,close=chart_bars.Close,
-        name="日経平均（分足）",increasing_line_color="#00d34f",decreasing_line_color="#ff3b20",
-        increasing_fillcolor="#00d34f",decreasing_fillcolor="#ff3b20"))
-    intraday_fig.add_hline(y=target,line_color="#f5c400",line_dash="dash",line_width=1.2)
-    intraday_fig.update_layout(template="plotly_dark",height=510,margin=dict(l=0,r=8,t=8,b=10),
-        paper_bgcolor="#050505",plot_bgcolor="#050505",font=dict(color="#eeeeee"),
-        xaxis_rangeslider_visible=False,hovermode="x unified",
-        xaxis=dict(type="category",showgrid=True,gridcolor="rgba(145,145,160,.22)",nticks=6,tickangle=0),
-        yaxis=dict(side="right",tickformat=",.0f",gridcolor="rgba(145,145,160,.22)"),
-        legend=dict(orientation="h",y=-.25,x=0))
-    # String category positions remove non-trading time, preserving consistent candle spacing.
-    intraday_fig.update_traces(x=chart_bars.index.strftime("%H:%M").tolist(),selector=dict(type="candlestick"))
-    if show_intraday_ichimoku:
-        intraday_fig.update_traces(x=chart_bars.index.strftime("%H:%M").tolist(),selector=dict(type="scatter"))
-    intraday_fig.update_xaxes(tickmode="array",
-        tickvals=chart_bars.index.strftime("%H:%M").tolist()[::max(1,len(chart_bars)//5)],
-        ticktext=chart_bars.index.strftime("%H:%M").tolist()[::max(1,len(chart_bars)//5)])
-    st.plotly_chart(intraday_fig,use_container_width=True,key="intraday_chart",config={"displaylogo":False,"scrollZoom":False,"modeBarButtonsToRemove":["lasso2d","select2d"]})
-    st.caption("価格到達時刻は足の開始時刻です。足の中で実際に約定した秒・分までは特定できません。5分足なら最大5分、15分足なら最大15分の幅があります。")
-    st.caption("指定価格を含む足はOHLCの範囲判定です。ギャップや気配・データ欠損などで実際の取引成立を保証しません。")
-    st.download_button("分足CSV（JST）を保存",intraday.to_csv(index_label="JST").encode("utf-8-sig"),file_name=f"nikkei_{interval_code}_jst.csv",mime="text/csv")
+        target=st.number_input("追跡する重要価格（円）",min_value=0.0,value=round(float(last.Close),2),step=10.0,format="%.2f",key="intraday_target")
+        touched=intraday[(intraday.Low<=target)&(intraday.High>=target)]
+        above_target=intraday[intraday.High>=target]
+        below_target=intraday[intraday.Low<=target]
+        event_rows=[]
+        for label,frame in [("指定価格を含む足（初回）",touched),("指定価格以上の高値（初回）",above_target),("指定価格以下の安値（初回）",below_target)]:
+            if not frame.empty:
+                ix=frame.index[0]
+                event_rows.append({"条件":label,"日時（JST・足開始）":ix.strftime("%Y/%m/%d %H:%M"),"安値":f"{frame.iloc[0].Low:,.2f}","高値":f"{frame.iloc[0].High:,.2f}"})
+        if event_rows:
+            st.dataframe(pd.DataFrame(event_rows),hide_index=True,use_container_width=True)
+        else:
+            st.info("取得期間中に指定価格へ到達した足はありません。")
+
+        # Plot only one selected trading session by default, eliminating large overnight/weekend gaps.
+        available_days=sorted(intraday.index.strftime("%Y-%m-%d").unique(),reverse=True)
+        selected_day=st.selectbox("チャート表示日",available_days,index=0,key="intraday_chart_day")
+        chart_bars=intraday[intraday.index.strftime("%Y-%m-%d")==selected_day]
+        st.caption(f"表示：{selected_day}｜{len(chart_bars)}本のローソク足。過去の高値・安値集計は選択した取得期間全体を対象とします。")
+        show_intraday_ichimoku=st.checkbox("分足の一目均衡表（9・26・52）を表示",False)
+        intraday_fig=go.Figure()
+        if show_intraday_ichimoku:
+            idata=calc(intraday).loc[chart_bars.index]
+            intraday_fig.add_trace(go.Scatter(x=idata.index,y=idata.tenkan,name="分足転換線",line=dict(color="rgba(249,208,0,.75)",width=1.3)))
+            intraday_fig.add_trace(go.Scatter(x=idata.index,y=idata.kijun,name="分足基準線",line=dict(color="rgba(36,198,207,.75)",width=1.3)))
+        intraday_fig.add_trace(go.Candlestick(x=chart_bars.index,open=chart_bars.Open,high=chart_bars.High,low=chart_bars.Low,close=chart_bars.Close,
+            name="日経平均（分足）",increasing_line_color="#00d34f",decreasing_line_color="#ff3b20",
+            increasing_fillcolor="#00d34f",decreasing_fillcolor="#ff3b20"))
+        intraday_fig.add_hline(y=target,line_color="#f5c400",line_dash="dash",line_width=1.2)
+        intraday_fig.update_layout(template="plotly_dark",height=510,margin=dict(l=0,r=8,t=8,b=10),
+            paper_bgcolor="#050505",plot_bgcolor="#050505",font=dict(color="#eeeeee"),
+            xaxis_rangeslider_visible=False,hovermode="x unified",
+            xaxis=dict(type="category",showgrid=True,gridcolor="rgba(145,145,160,.22)",nticks=6,tickangle=0),
+            yaxis=dict(side="right",tickformat=",.0f",gridcolor="rgba(145,145,160,.22)"),
+            legend=dict(orientation="h",y=-.25,x=0))
+        # String category positions remove non-trading time, preserving consistent candle spacing.
+        intraday_fig.update_traces(x=chart_bars.index.strftime("%H:%M").tolist(),selector=dict(type="candlestick"))
+        if show_intraday_ichimoku:
+            intraday_fig.update_traces(x=chart_bars.index.strftime("%H:%M").tolist(),selector=dict(type="scatter"))
+        intraday_fig.update_xaxes(tickmode="array",
+            tickvals=chart_bars.index.strftime("%H:%M").tolist()[::max(1,len(chart_bars)//5)],
+            ticktext=chart_bars.index.strftime("%H:%M").tolist()[::max(1,len(chart_bars)//5)])
+        st.plotly_chart(intraday_fig,use_container_width=True,key="intraday_chart",config={"displaylogo":False,"scrollZoom":False,"modeBarButtonsToRemove":["lasso2d","select2d"]})
+        st.caption("価格到達時刻は足の開始時刻です。足の中で実際に約定した秒・分までは特定できません。5分足なら最大5分、15分足なら最大15分の幅があります。")
+        st.caption("指定価格を含む足はOHLCの範囲判定です。ギャップや気配・データ欠損などで実際の取引成立を保証しません。")
+        st.download_button("分足CSV（JST）を保存",intraday.to_csv(index_label="JST").encode("utf-8-sig"),file_name=f"nikkei_{interval_code}_jst.csv",mime="text/csv")
+
+render_intraday_live()
 st.caption("Yahoo Financeの直近分足に加え、GitHub Actionsによる1分足の継続保存を設定しています。保存は外部データの取得・ワークフロー実行状況に依存します。")
 
 from pathlib import Path
