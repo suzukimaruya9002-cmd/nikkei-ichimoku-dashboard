@@ -198,3 +198,78 @@ with st.expander("データのダウンロード",expanded=False):
     st.download_button("CSVを保存",d.loc[d.index>=pd.Timestamp("2026-06-22")].to_csv(index_label="Date").encode("utf-8-sig"),
         file_name="nikkei_ichimoku.csv",mime="text/csv")
 st.caption("免責：投資判断の参考資料です。場中の高安値到達時刻は日足データからは特定できません。")
+
+
+st.divider()
+st.subheader("分単位の時間・価格分析")
+st.caption("日足・週足の一目均衡表とは別に、場中の価格到達時刻を調べます。時刻は日本時間（JST）です。")
+intraday_interval=st.segmented_control("分足",["1分足","5分足","15分足"],default="5分足")
+period_options={"1分足":["直近1日","直近5日"],"5分足":["直近5日","直近1か月"],"15分足":["直近5日","直近1か月"]}
+intraday_period=st.selectbox("分足の取得期間",period_options[intraday_interval],key="intraday_period")
+interval_code={"1分足":"1m","5分足":"5m","15分足":"15m"}[intraday_interval]
+period_code={"直近1日":"1d","直近5日":"5d","直近1か月":"1mo"}[intraday_period]
+
+@st.cache_data(ttl=300,show_spinner=False)
+def load_intraday(interval,period):
+    z=yf.download("^N225",period=period,interval=interval,auto_adjust=False,progress=False,multi_level_index=False,prepost=False)
+    if z is None or z.empty:
+        return pd.DataFrame()
+    z=z[["Open","High","Low","Close"]].dropna().sort_index()
+    idx=pd.to_datetime(z.index)
+    if idx.tz is None:
+        idx=idx.tz_localize("Asia/Tokyo")
+    else:
+        idx=idx.tz_convert("Asia/Tokyo")
+    z.index=idx
+    return z
+
+with st.spinner("分足を取得しています"):
+    intraday=load_intraday(interval_code,period_code)
+if intraday.empty:
+    st.warning("この期間の分足データは取得できませんでした。期間や足種を変更してお試しください。")
+else:
+    last_intraday=intraday.iloc[-1]
+    st.caption(f"最終取得足：{intraday.index[-1]:%Y/%m/%d %H:%M} JST（足の開始時刻）｜配信遅延の可能性あり")
+    hidx=intraday.High.idxmax()
+    lidx=intraday.Low.idxmin()
+    cc1,cc2=st.columns(2)
+    cc1.metric("期間高値",f"{intraday.High.max():,.2f} 円")
+    cc1.caption(f"{hidx:%m/%d %H:%M} JST の足")
+    cc2.metric("期間安値",f"{intraday.Low.min():,.2f} 円")
+    cc2.caption(f"{lidx:%m/%d %H:%M} JST の足")
+
+    target=st.number_input("追跡する重要価格（円）",min_value=0.0,value=round(float(last.Close),2),step=10.0,format="%.2f",key="intraday_target")
+    touched=intraday[(intraday.Low<=target)&(intraday.High>=target)]
+    above_target=intraday[intraday.High>=target]
+    below_target=intraday[intraday.Low<=target]
+    event_rows=[]
+    for label,frame in [("指定価格を含む足（初回）",touched),("指定価格以上の高値（初回）",above_target),("指定価格以下の安値（初回）",below_target)]:
+        if not frame.empty:
+            ix=frame.index[0]
+            event_rows.append({"条件":label,"日時（JST・足開始）":ix.strftime("%Y/%m/%d %H:%M"),"安値":f"{frame.iloc[0].Low:,.2f}","高値":f"{frame.iloc[0].High:,.2f}"})
+    if event_rows:
+        st.dataframe(pd.DataFrame(event_rows),hide_index=True,use_container_width=True)
+    else:
+        st.info("取得期間中に指定価格へ到達した足はありません。")
+
+    show_intraday_ichimoku=st.checkbox("分足の一目均衡表（9・26・52）を表示",False)
+    intraday_fig=go.Figure()
+    if show_intraday_ichimoku:
+        idata=calc(intraday)
+        intraday_fig.add_trace(go.Scatter(x=idata.index,y=idata.tenkan,name="分足転換線",line=dict(color="rgba(249,208,0,.75)",width=1.3)))
+        intraday_fig.add_trace(go.Scatter(x=idata.index,y=idata.kijun,name="分足基準線",line=dict(color="rgba(36,198,207,.75)",width=1.3)))
+    intraday_fig.add_trace(go.Candlestick(x=intraday.index,open=intraday.Open,high=intraday.High,low=intraday.Low,close=intraday.Close,
+        name="日経平均（分足）",increasing_line_color="#00d34f",decreasing_line_color="#ff3b20",
+        increasing_fillcolor="#00d34f",decreasing_fillcolor="#ff3b20"))
+    intraday_fig.add_hline(y=target,line_color="#f5c400",line_dash="dash",line_width=1.2)
+    intraday_fig.update_layout(template="plotly_dark",height=440,margin=dict(l=0,r=4,t=8,b=5),
+        paper_bgcolor="#050505",plot_bgcolor="#050505",font=dict(color="#eeeeee"),
+        xaxis_rangeslider_visible=False,hovermode="x unified",
+        xaxis=dict(showgrid=True,gridcolor="rgba(145,145,160,.22)",tickformat="%m/%d %H:%M",nticks=5),
+        yaxis=dict(side="right",tickformat=",.0f",gridcolor="rgba(145,145,160,.22)"),
+        legend=dict(orientation="h",y=-.25,x=0))
+    st.plotly_chart(intraday_fig,use_container_width=True,key="intraday_chart",config={"displaylogo":False,"scrollZoom":False})
+    st.caption("価格到達時刻は足の開始時刻です。足の中で実際に約定した秒・分までは特定できません。5分足なら最大5分、15分足なら最大15分の幅があります。")
+    st.caption("指定価格を含む足はOHLCの範囲判定です。ギャップや気配・データ欠損などで実際の取引成立を保証しません。")
+    st.download_button("分足CSV（JST）を保存",intraday.to_csv(index_label="JST").encode("utf-8-sig"),file_name=f"nikkei_{interval_code}_jst.csv",mime="text/csv")
+st.caption("分足データの取得可能期間は提供元の制約を受けます。過去データの永続保存・自動蓄積は未実装です。")
