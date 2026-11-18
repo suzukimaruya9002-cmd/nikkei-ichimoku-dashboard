@@ -5,6 +5,15 @@ import yfinance as yf
 
 st.set_page_config(page_title="日経平均｜一目均衡表", page_icon="📈", layout="wide")
 st.markdown("""<style>
+html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"], [data-testid="stSidebar"] {background-color:#050505!important;color:#f4f4f4!important}
+[data-testid="stAppViewContainer"] {background: #050505!important}
+[data-testid="stMetric"] {background:#0b0b0b;border:1px solid #292b35;border-radius:7px;padding:7px 9px}
+[data-testid="stMetricValue"] {color:#f5f5f5!important}
+[data-testid="stMetricDelta"] {color:#f5c400!important}
+[data-testid="stExpander"] {background:#0b0b0b;border-color:#292b35!important}
+[data-testid="stCaptionContainer"] {color:#a5a6b3!important}
+button[kind="primary"] {background:#f4c400!important;color:#080808!important}
+
 .block-container {padding: 0.9rem 0.8rem 3rem;max-width:1200px}
 h1 {font-size:1.5rem!important;margin-bottom:.25rem!important}
 h2 {font-size:1.15rem!important}
@@ -51,8 +60,8 @@ with st.container():
     with x2:
         period=st.selectbox("表示期間",["直近1か月","直近3か月","2026/6/22以降"],index=1)
     with st.expander("表示する線・追加設定",expanded=False):
-        show_tenkan=st.checkbox("転換線（橙）",True)
-        show_kijun=st.checkbox("基準線（青）",True)
+        show_tenkan=st.checkbox("転換線（黄）",True)
+        show_kijun=st.checkbox("基準線（水色）",True)
         show_cloud=st.checkbox("雲（緑・赤）",True)
         show_chikou=st.checkbox("遅行スパン（紫）",False)
         show_markers=st.checkbox("直近の高値・安値マーカー",True)
@@ -82,8 +91,8 @@ st.caption(f"データ最終日：{end:%Y/%m/%d}（{timeframe}）｜取引所の
 
 fig=go.Figure()
 fig.add_trace(go.Candlestick(x=v.index,open=v.Open,high=v.High,low=v.Low,close=v.Close,
-    name="日経平均",increasing_line_color="#22c55e",decreasing_line_color="#f87171",
-    increasing_fillcolor="#22c55e",decreasing_fillcolor="#f87171"))
+    name="日経平均",increasing_line_color="#00d34f",decreasing_line_color="#ff3b20",
+    increasing_fillcolor="#00d34f",decreasing_fillcolor="#ff3b20"))
 if show_cloud:
     # 26本先への雲投影。日足の未来日付は平日ベースで日本の祝日は未考慮。
     future=(pd.bdate_range(d.index[-1]+pd.offsets.BDay(1),periods=26)
@@ -97,43 +106,46 @@ if show_cloud:
     a.loc[future]=d.a_raw.tail(26).to_numpy()
     b.loc[future]=d.b_raw.tail(26).to_numpy()
     cx=cloud_dates[cloud_dates>=v.index[0]]
-    fig.add_trace(go.Scatter(x=cx,y=a.loc[cx],name="先行A",line=dict(color="#22c55e",width=1.2),
+    fig.add_trace(go.Scatter(x=cx,y=a.loc[cx],name="先行A",line=dict(color="#2db56a",width=1.2),
         hovertemplate="%{x|%Y/%m/%d}<br>先行A %{y:,.0f}<extra></extra>"))
-    fig.add_trace(go.Scatter(x=cx,y=b.loc[cx],name="先行B",line=dict(color="#f87171",width=1.2),
-        fill="tonexty",fillcolor="rgba(34,197,94,.09)",
+    fig.add_trace(go.Scatter(x=cx,y=b.loc[cx],name="先行B",line=dict(color="#f16c69",width=1.2),
+        fill="tonexty",fillcolor="rgba(43,170,98,.12)",
         hovertemplate="%{x|%Y/%m/%d}<br>先行B %{y:,.0f}<extra></extra>"))
 if show_tenkan:
-    fig.add_trace(go.Scatter(x=v.index,y=v.tenkan,name="転換線",line=dict(color="#fbbf24",width=2)))
+    fig.add_trace(go.Scatter(x=v.index,y=v.tenkan,name="転換線",line=dict(color="#f9d000",width=2.1)))
 if show_kijun:
-    fig.add_trace(go.Scatter(x=v.index,y=v.kijun,name="基準線",line=dict(color="#60a5fa",width=2)))
+    fig.add_trace(go.Scatter(x=v.index,y=v.kijun,name="基準線",line=dict(color="#24c6cf",width=2.1)))
 if show_chikou:
     # 終値を26本前の日付にプロット（最新26本を含む）
     chikou_dates=d.index[:-26]
     chikou_values=d.Close.iloc[26:].to_numpy()
     lag=pd.Series(chikou_values,index=chikou_dates)
     lag=lag.loc[lag.index>=v.index[0]]
-    fig.add_trace(go.Scatter(x=lag.index,y=lag,name="遅行スパン",line=dict(color="#c084fc",width=1.6,dash="dot")))
+    fig.add_trace(go.Scatter(x=lag.index,y=lag,name="遅行スパン",line=dict(color="#ae86f5",width=1.6,dash="dot")))
 
 high_date=v.High.idxmax()
 low_date=v.Low.idxmin()
 if show_markers:
     fig.add_trace(go.Scatter(x=[high_date,low_date],y=[v.High.max(),v.Low.min()],
-        mode="markers",name="高値・安値",marker=dict(size=9,color=["#fbbf24","#38bdf8"],symbol=["triangle-down","triangle-up"]),
+        mode="markers",name="高値・安値",marker=dict(size=9,color=["#f9d000","#24c6cf"],symbol=["triangle-down","triangle-up"]),
         text=[f"高値 {v.High.max():,.0f}円",f"安値 {v.Low.min():,.0f}円"],
         hovertemplate="%{x|%Y/%m/%d}<br>%{text}<extra></extra>"))
 
+fig.add_hline(y=float(last.Close),line_color="#f5c400",line_width=1.3,line_dash="dash",opacity=.9,
+    annotation_text=f"{last.Close:,.0f}",annotation_position="right",annotation_font_color="#f5c400")
+
 fig.update_layout(
-    template="plotly_dark",height=460,margin=dict(l=0,r=2,t=14,b=5),
+    template="plotly_dark",height=510,margin=dict(l=0,r=4,t=14,b=5),
     xaxis_rangeslider_visible=False,hovermode="x unified",
-    paper_bgcolor="#0e1117",plot_bgcolor="#0e1117",
+    paper_bgcolor="#050505",plot_bgcolor="#050505",font=dict(color="#e5e5e5",size=12),
     legend=dict(orientation="h",y=-.18,x=0,font=dict(size=10)),
-    xaxis=dict(showgrid=False,tickformat="%m/%d",nticks=6),
+    xaxis=dict(showgrid=True,gridcolor="rgba(145,145,160,.30)",tickformat="%m/%d",nticks=5,zeroline=False),
     yaxis=dict(title=None,side="right",tickformat=",.0f",nticks=6,showgrid=True,
-               gridcolor="rgba(160,170,190,.18)"),
+               gridcolor="rgba(145,145,160,.30)",zeroline=False),
     dragmode="pan")
 st.plotly_chart(fig,use_container_width=True,config={"displaylogo":False,"scrollZoom":False,
     "modeBarButtonsToRemove":["lasso2d","select2d","autoScale2d"]})
-st.caption("チャートの点をタップすると日付と価格を表示します。線の凡例をタップすると表示を切り替えられます。")
+st.caption("黄色の破線＝最新終値。チャートをタップすると日付と価格を確認できます。")
 
 st.subheader("重要価格")
 high,low=st.columns(2)
