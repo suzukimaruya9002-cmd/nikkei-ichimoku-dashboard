@@ -3,136 +3,184 @@ import pandas as pd
 import plotly.graph_objects as go
 import yfinance as yf
 
-st.set_page_config(page_title="日経平均・一目均衡表",page_icon="📈",layout="wide")
-st.title("日経平均 × 一目均衡表")
-st.caption("分析起点：2026/06/22｜株価：Yahoo Finance (^N225)｜15分キャッシュ")
+st.set_page_config(page_title="日経平均｜一目均衡表", page_icon="📈", layout="wide")
+st.markdown("""<style>
+.block-container {padding: 0.9rem 0.8rem 3rem;max-width:1200px}
+h1 {font-size:1.5rem!important;margin-bottom:.25rem!important}
+h2 {font-size:1.15rem!important}
+[data-testid="stMetricValue"] {font-size:1.35rem}
+[data-testid="stMetricLabel"] {font-size:.75rem}
+div[data-testid="stHorizontalBlock"] {gap:.4rem}
+@media(max-width:700px) {
+.block-container {padding:.65rem .55rem 2rem}
+[data-testid="stMetricValue"] {font-size:1.15rem}
+[data-testid="stMetricDelta"] {font-size:.7rem}
+}
+</style>""",unsafe_allow_html=True)
+st.title("日経平均｜一目均衡表")
+st.caption("日足・週足 / 9・26・52 / 価格はYahoo Finance提供（遅延あり）")
 
-@st.cache_data(ttl=900)
-def prices():
-    df=yf.download("^N225",start="2025-01-01",auto_adjust=False,progress=False,multi_level_index=False)
-    if df.empty:
-        raise RuntimeError("株価データを取得できませんでした")
-    df.index=pd.to_datetime(df.index).tz_localize(None).normalize()
-    return df[["Open","High","Low","Close"]].dropna().sort_index()
+@st.cache_data(ttl=900,show_spinner=False)
+def load_prices():
+    d=yf.download("^N225",start="2024-01-01",auto_adjust=False,progress=False,multi_level_index=False)
+    if d is None or d.empty:
+        raise RuntimeError("株価データを取得できません")
+    d.index=pd.to_datetime(d.index).tz_localize(None).normalize()
+    return d[["Open","High","Low","Close"]].dropna().sort_index()
 
-def ichimoku(df):
-    d=df.copy()
-    d["転換線"]=(d.High.rolling(9).max()+d.Low.rolling(9).min())/2
-    d["基準線"]=(d.High.rolling(26).max()+d.Low.rolling(26).min())/2
-    d["先行A原値"]=(d["転換線"]+d["基準線"])/2
-    d["先行B原値"]=(d.High.rolling(52).max()+d.Low.rolling(52).min())/2
-    d["雲A"]=d["先行A原値"].shift(26)
-    d["雲B"]=d["先行B原値"].shift(26)
-    d["遅行スパン"]=d.Close.shift(-26)
+def calc(d):
+    d=d.copy()
+    d["tenkan"]=(d.High.rolling(9).max()+d.Low.rolling(9).min())/2
+    d["kijun"]=(d.High.rolling(26).max()+d.Low.rolling(26).min())/2
+    d["a_raw"]=(d.tenkan+d.kijun)/2
+    d["b_raw"]=(d.High.rolling(52).max()+d.Low.rolling(52).min())/2
+    d["cloud_a"]=d.a_raw.shift(26)
+    d["cloud_b"]=d.b_raw.shift(26)
     return d
 
-with st.sidebar:
-    timeframe=st.radio("時間軸",["日足","週足"])
-    period=st.selectbox("表示範囲",["2026/6/22から","直近3か月","直近1か月"])
-    show_lag=st.checkbox("遅行スパン",True)
-    show_points=st.checkbox("重要高値・安値",True)
-    auto=st.checkbox("15分ごとに画面を再読み込み",False)
-    if st.button("最新データを再取得"):
-        prices.clear()
-        st.rerun()
-if auto:
-    import streamlit.components.v1 as components
-    components.html('<script>setTimeout(()=>window.parent.location.reload(),900000)</script>',height=0)
-
 try:
-    daily=prices()
+    daily=load_prices()
 except Exception as exc:
-    st.error(f"取得エラー：{exc}")
+    st.error(f"データ取得エラー：{exc}")
     st.stop()
+
+with st.container():
+    x1,x2=st.columns(2)
+    with x1:
+        timeframe=st.segmented_control("時間軸",["日足","週足"],default="日足")
+    with x2:
+        period=st.selectbox("表示期間",["直近1か月","直近3か月","2026/6/22以降"],index=1)
+    with st.expander("表示する線・追加設定",expanded=False):
+        show_tenkan=st.checkbox("転換線（橙）",True)
+        show_kijun=st.checkbox("基準線（青）",True)
+        show_cloud=st.checkbox("雲（緑・赤）",True)
+        show_chikou=st.checkbox("遅行スパン（紫）",False)
+        show_markers=st.checkbox("直近の高値・安値マーカー",True)
+        if st.button("最新株価を再取得"):
+            load_prices.clear()
+            st.rerun()
+
 if timeframe=="週足":
     base=daily.resample("W-FRI").agg({"Open":"first","High":"max","Low":"min","Close":"last"}).dropna()
 else:
     base=daily
-d=ichimoku(base)
-last=d.iloc[-1]
-previous=d.iloc[-2]
+d=calc(base)
 end=d.index[-1]
-start=pd.Timestamp("2026-06-22") if period=="2026/6/22から" else end-pd.Timedelta(days=93 if period=="直近3か月" else 32)
+start={"直近1か月":end-pd.Timedelta(days=35),"直近3か月":end-pd.Timedelta(days=95),"2026/6/22以降":pd.Timestamp("2026-06-22")}[period]
 v=d.loc[d.index>=start]
 if v.empty:
     st.warning("選択期間のデータがありません")
     st.stop()
-m=st.columns(4)
-m[0].metric("終値",f"{last.Close:,.2f} 円",f"{last.Close-previous.Close:+,.2f} 円")
-m[1].metric("転換線",f"{last['転換線']:,.2f}")
-m[2].metric("基準線",f"{last['基準線']:,.2f}")
-m[3].metric("最終データ日",end.strftime("%Y/%m/%d"))
+last=d.iloc[-1]
+prev=d.iloc[-2]
+delta=last.Close-prev.Close
+m1,m2,m3=st.columns(3)
+m1.metric("終値",f"{last.Close:,.0f}",f"{delta:+,.0f}円")
+m2.metric("転換線",f"{last.tenkan:,.0f}")
+m3.metric("基準線",f"{last.kijun:,.0f}")
+st.caption(f"データ最終日：{end:%Y/%m/%d}（{timeframe}）｜取引所の休場・配信遅延に注意")
 
 fig=go.Figure()
-fig.add_trace(go.Candlestick(x=v.index,open=v.Open,high=v.High,low=v.Low,close=v.Close,name="日経平均",increasing_line_color="#22c55e",decreasing_line_color="#ef4444"))
-for name,color in [("転換線","#f59e0b"),("基準線","#60a5fa")]:
-    fig.add_trace(go.Scatter(x=v.index,y=v[name],name=name,line=dict(color=color,width=2)))
-if timeframe=="日足":
-    future=pd.bdate_range(d.index[-1]+pd.offsets.BDay(1),periods=26)
-else:
-    future=pd.date_range(d.index[-1]+pd.Timedelta(days=7),periods=26,freq="W-FRI")
-cloud_dates=d.index.append(future)
-a=pd.Series(float("nan"),index=cloud_dates)
-b=a.copy()
-a.loc[d.index]=d["雲A"]
-b.loc[d.index]=d["雲B"]
-a.loc[future]=d["先行A原値"].tail(26).to_numpy()
-b.loc[future]=d["先行B原値"].tail(26).to_numpy()
-mask=cloud_dates>=v.index[0]
-cx=cloud_dates[mask]
-fig.add_trace(go.Scatter(x=cx,y=a.loc[cx],name="先行スパンA",line=dict(color="#22c55e",width=1)))
-fig.add_trace(go.Scatter(x=cx,y=b.loc[cx],name="先行スパンB",line=dict(color="#f87171",width=1),fill="tonexty",fillcolor="rgba(34,197,94,.13)"))
-if show_lag:
-    fig.add_trace(go.Scatter(x=v.index,y=v["遅行スパン"],name="遅行スパン",line=dict(color="#a78bfa",dash="dot")))
-turns=[]
-for i in range(5,len(v)-5):
-    if v.High.iloc[i]==v.High.iloc[i-5:i+6].max():
-        turns.append((v.index[i],float(v.High.iloc[i]),"高値"))
-    if v.Low.iloc[i]==v.Low.iloc[i-5:i+6].min():
-        turns.append((v.index[i],float(v.Low.iloc[i]),"安値"))
-turns.sort(key=lambda p:p[0])
-if show_points:
-    for dt,price,kind in turns[-12:]:
-        fig.add_annotation(x=dt,y=price,text=f"{dt:%m/%d} {kind}<br>{price:,.0f}",showarrow=True,ay=-36 if kind=="高値" else 36,font=dict(size=10))
-fig.update_layout(template="plotly_dark",height=650,hovermode="x unified",xaxis_rangeslider_visible=False,legend=dict(orientation="h"),margin=dict(l=5,r=5,t=25,b=5),xaxis=dict(range=[v.index[0],future[-1]]),yaxis_title="円")
-st.plotly_chart(fig,use_container_width=True)
-st.caption("雲は26本先、遅行スパンは26本前に描画。将来の日付は日本の市場休場日を考慮していない概算です。")
+fig.add_trace(go.Candlestick(x=v.index,open=v.Open,high=v.High,low=v.Low,close=v.Close,
+    name="日経平均",increasing_line_color="#22c55e",decreasing_line_color="#f87171",
+    increasing_fillcolor="#22c55e",decreasing_fillcolor="#f87171"))
+if show_cloud:
+    # 26本先への雲投影。日足の未来日付は平日ベースで日本の祝日は未考慮。
+    future=(pd.bdate_range(d.index[-1]+pd.offsets.BDay(1),periods=26)
+            if timeframe=="日足" else
+            pd.date_range(d.index[-1]+pd.Timedelta(days=7),periods=26,freq="W-FRI"))
+    cloud_dates=d.index.append(future)
+    a=pd.Series(float("nan"),index=cloud_dates)
+    b=a.copy()
+    a.loc[d.index]=d.cloud_a
+    b.loc[d.index]=d.cloud_b
+    a.loc[future]=d.a_raw.tail(26).to_numpy()
+    b.loc[future]=d.b_raw.tail(26).to_numpy()
+    cx=cloud_dates[cloud_dates>=v.index[0]]
+    fig.add_trace(go.Scatter(x=cx,y=a.loc[cx],name="先行A",line=dict(color="#22c55e",width=1.2),
+        hovertemplate="%{x|%Y/%m/%d}<br>先行A %{y:,.0f}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=cx,y=b.loc[cx],name="先行B",line=dict(color="#f87171",width=1.2),
+        fill="tonexty",fillcolor="rgba(34,197,94,.09)",
+        hovertemplate="%{x|%Y/%m/%d}<br>先行B %{y:,.0f}<extra></extra>"))
+if show_tenkan:
+    fig.add_trace(go.Scatter(x=v.index,y=v.tenkan,name="転換線",line=dict(color="#fbbf24",width=2)))
+if show_kijun:
+    fig.add_trace(go.Scatter(x=v.index,y=v.kijun,name="基準線",line=dict(color="#60a5fa",width=2)))
+if show_chikou:
+    # 終値を26本前の日付にプロット（最新26本を含む）
+    chikou_dates=d.index[:-26]
+    chikou_values=d.Close.iloc[26:].to_numpy()
+    lag=pd.Series(chikou_values,index=chikou_dates)
+    lag=lag.loc[lag.index>=v.index[0]]
+    fig.add_trace(go.Scatter(x=lag.index,y=lag,name="遅行スパン",line=dict(color="#c084fc",width=1.6,dash="dot")))
 
-st.subheader("一目均衡表の判定")
-top=max(last["雲A"],last["雲B"])
-bottom=min(last["雲A"],last["雲B"])
+high_date=v.High.idxmax()
+low_date=v.Low.idxmin()
+if show_markers:
+    fig.add_trace(go.Scatter(x=[high_date,low_date],y=[v.High.max(),v.Low.min()],
+        mode="markers",name="高値・安値",marker=dict(size=9,color=["#fbbf24","#38bdf8"],symbol=["triangle-down","triangle-up"]),
+        text=[f"高値 {v.High.max():,.0f}円",f"安値 {v.Low.min():,.0f}円"],
+        hovertemplate="%{x|%Y/%m/%d}<br>%{text}<extra></extra>"))
+
+fig.update_layout(
+    template="plotly_dark",height=460,margin=dict(l=0,r=2,t=14,b=5),
+    xaxis_rangeslider_visible=False,hovermode="x unified",
+    paper_bgcolor="#0e1117",plot_bgcolor="#0e1117",
+    legend=dict(orientation="h",y=-.18,x=0,font=dict(size=10)),
+    xaxis=dict(showgrid=False,tickformat="%m/%d",nticks=6),
+    yaxis=dict(title=None,side="right",tickformat=",.0f",nticks=6,showgrid=True,
+               gridcolor="rgba(160,170,190,.18)"),
+    dragmode="pan")
+st.plotly_chart(fig,use_container_width=True,config={"displaylogo":False,"scrollZoom":False,
+    "modeBarButtonsToRemove":["lasso2d","select2d","autoScale2d"]})
+st.caption("チャートの点をタップすると日付と価格を表示します。線の凡例をタップすると表示を切り替えられます。")
+
+st.subheader("重要価格")
+high,low=st.columns(2)
+high.metric("期間高値",f"{v.High.max():,.0f} 円")
+high.caption(f"到達日：{high_date:%Y/%m/%d}")
+low.metric("期間安値",f"{v.Low.min():,.0f} 円")
+low.caption(f"到達日：{low_date:%Y/%m/%d}")
+
+top=max(last.cloud_a,last.cloud_b)
+bottom=min(last.cloud_a,last.cloud_b)
 above=last.Close>top
 below=last.Close<bottom
-cross=last["転換線"]>last["基準線"]
-lag=len(d)>26 and last.Close>d.Close.iloc[-27]
-state="三役好転" if above and cross and lag else "三役逆転" if below and not cross and not lag else "混在"
-st.write(f"**{state}**｜株価：{'雲上' if above else '雲下' if below else '雲内'}｜転換線：{'基準線より上' if cross else '基準線以下'}｜遅行スパン：{'強気' if lag else '弱気'}")
-st.caption("遅行スパンの強弱は26本前の終値との比較による簡易判定です。")
-left,right=st.columns(2)
-with left:
-    st.subheader("重要価格・到達日")
-    q=v.tail(80)
-    rows=[{"区分":"期間高値","価格":f"{q.High.max():,.2f}","日付":q.High.idxmax().strftime("%Y/%m/%d")},{"区分":"期間安値","価格":f"{q.Low.min():,.2f}","日付":q.Low.idxmin().strftime("%Y/%m/%d")},{"区分":"終値","価格":f"{last.Close:,.2f}","日付":end.strftime("%Y/%m/%d")}]
-    st.dataframe(pd.DataFrame(rows),hide_index=True,use_container_width=True)
-    st.caption("日足・週足では高安値に到達した場中時刻は特定できません。")
-with right:
-    st.subheader("時間論")
+tk=last.tenkan>last.kijun
+# 遅行スパンは最新終値を26本前の日付へ描くため、比較対象は26本前の終値。
+lag_bull=last.Close>d.Close.iloc[-27]
+state="三役好転（簡易）" if above and tk and lag_bull else "三役逆転（簡易）" if below and not tk and not lag_bull else "混在"
+st.subheader("現在の判定")
+st.write(f"**{state}**｜株価：{'雲の上' if above else '雲の下' if below else '雲の中'}｜転換線：{'基準線より上' if tk else '基準線以下'}｜遅行：{'強気' if lag_bull else '弱気'}")
+st.caption("遅行スパンは26本前の終値との比較による簡易判定で、ローソク足の高安との関係は含みません。")
+
+with st.expander("時間論・転換点",expanded=False):
+    turns=[]
+    for i in range(5,len(d)-5):
+        if d.High.iloc[i]==d.High.iloc[i-5:i+6].max():
+            turns.append((d.index[i],float(d.High.iloc[i]),"高値",i))
+        if d.Low.iloc[i]==d.Low.iloc[i-5:i+6].min():
+            turns.append((d.index[i],float(d.Low.iloc[i]),"安値",i))
+    turns.sort(key=lambda x:x[0])
     if turns:
-        dt,price,kind=turns[-1]
-        origin=d.index.get_loc(dt)
-        st.write(f"起点：{dt:%Y/%m/%d} {kind} {price:,.2f}円")
-        st.metric("起点からの本数（起点含む）",len(d)-origin)
-        st.dataframe(pd.DataFrame([{"基本数値":n,"到達日":d.index[origin+n-1].strftime("%Y/%m/%d") if origin+n-1<len(d) else "未到達"} for n in (9,17,26,33,42,65,76,129)]),hide_index=True,use_container_width=True)
-    else:
-        st.info("確定転換点がまだありません")
-st.subheader("値幅観測（下落波動 A→B→C）")
-c1,c2,c3=st.columns(3)
-A=c1.number_input("A：高値",min_value=0.0,value=float(v.High.max()))
-B=c2.number_input("B：安値",min_value=0.0,value=float(v.Low.min()))
-C=c3.number_input("C：戻り高値",min_value=0.0,value=float(last.Close))
-if A<=B or C<=B:
-    st.warning("下落波動では通常A>B、C>Bの点を指定します")
-targets={"N":C-(A-B),"E":B-(A-B),"V":B-(C-B),"NT":C-(A-C)}
-st.dataframe(pd.DataFrame([{"観測値":k,"価格（円）":f"{value:,.2f}"} for k,value in targets.items()]),hide_index=True,use_container_width=True)
-st.download_button("CSVを保存",d.loc[d.index>=pd.Timestamp("2026-06-22")].to_csv(index_label="Date").encode("utf-8-sig"),file_name="nikkei_ichimoku.csv",mime="text/csv")
-st.caption("株価データには遅延・欠損の可能性があります。投資判断はご自身で行ってください。")
+        dt,price,kind,idx=turns[-1]
+        st.write(f"直近の確定転換点：**{dt:%Y/%m/%d} {kind} {price:,.0f}円**")
+        st.write(f"起点を1本目として、現在 **{len(d)-idx}本目**")
+        rows=[{"基本数値":n,"到達日":d.index[idx+n-1].strftime("%Y/%m/%d") if idx+n-1<len(d) else "未到達"} for n in (9,17,26,33,42,65,76,129)]
+        st.dataframe(pd.DataFrame(rows),hide_index=True,use_container_width=True)
+    st.caption("転換点は前後5本から機械的に抽出。直近5本は未確定です。")
+
+with st.expander("値幅観測論（3点入力）",expanded=False):
+    st.caption("下落波動A高値→B安値→C戻り高値。値は参考計算です。")
+    A=st.number_input("A：高値",min_value=0.0,value=float(v.High.max()))
+    B=st.number_input("B：安値",min_value=0.0,value=float(v.Low.min()))
+    C=st.number_input("C：戻り高値",min_value=0.0,value=float(last.Close))
+    if A<=B or C<=B:
+        st.warning("下落波動では通常A>B、C>Bの3点を選択してください。")
+    targets={"N":C-(A-B),"E":B-(A-B),"V":B-(C-B),"NT":C-(A-C)}
+    st.dataframe(pd.DataFrame([{"観測値":k,"価格（円）":f"{value:,.0f}"} for k,value in targets.items()]),hide_index=True,use_container_width=True)
+
+with st.expander("データのダウンロード",expanded=False):
+    st.download_button("CSVを保存",d.loc[d.index>=pd.Timestamp("2026-06-22")].to_csv(index_label="Date").encode("utf-8-sig"),
+        file_name="nikkei_ichimoku.csv",mime="text/csv")
+st.caption("免責：投資判断の参考資料です。場中の高安値到達時刻は日足データからは特定できません。")
