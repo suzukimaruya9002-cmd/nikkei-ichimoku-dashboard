@@ -223,6 +223,16 @@ def load_intraday(interval,period):
     z.index=idx
     return z
 
+from datetime import datetime, time as clock_time, timedelta
+from zoneinfo import ZoneInfo
+
+st.subheader("価格・期限の自動判定")
+st.caption("例：当日11:00までに59,200円を上抜ける。判定には1分足を使用し、表示中の5分足・15分足とは独立して計算します。")
+rule_price=st.number_input("突破価格（円）",min_value=0.01,value=59200.0,step=10.0,format="%.2f",key="rule_price")
+rule_deadline=st.time_input("判定期限（日本時間）",value=clock_time(11,0),step=60,key="rule_deadline")
+rule_direction=st.radio("判定条件",["上抜け（高値が指定価格を超える）","下抜け（安値が指定価格を下回る）"],horizontal=True,key="rule_direction")
+st.caption("判定対象は最新の取引日。期限ちょうどに始まる足は対象外です。場中データには遅延・欠損の可能性があります。")
+
 st.toggle("分足チャートを1分ごとに自動更新",value=True,key="intraday_autorefresh",help="画面を開いている間、60秒ごとに分足の取得・チャート表示を更新します。データ配信の遅延は解消しません。")
 if st.button("分足データを今すぐ再取得",key="force_intraday_refresh"):
     load_intraday.clear()
@@ -231,6 +241,35 @@ if st.button("分足データを今すぐ再取得",key="force_intraday_refresh"
 def render_intraday_live():
     with st.spinner("分足を取得しています"):
         intraday=load_intraday(interval_code,period_code)
+    # Use 1-minute data regardless of the selected chart interval.
+    minute=intraday if interval_code=="1m" else load_intraday("1m","5d")
+    now_jst=datetime.now(ZoneInfo("Asia/Tokyo"))
+    if minute.empty:
+        st.warning("転換条件：1分足を取得できず判定不能です。")
+    else:
+        today=now_jst.strftime("%Y-%m-%d")
+        minute_today=minute[minute.index.strftime("%Y-%m-%d")==today].sort_index()
+        if minute_today.empty:
+            st.info("転換条件：本日分の1分足がありません。休場日・寄り付き前・データ未配信の可能性があります。")
+        else:
+            deadline_dt=datetime.combine(now_jst.date(),rule_deadline,tzinfo=ZoneInfo("Asia/Tokyo"))
+            eligible=minute_today[minute_today.index<deadline_dt]
+            rising=rule_direction.startswith("上抜け")
+            hits=eligible[eligible.High>rule_price] if rising else eligible[eligible.Low<rule_price]
+            last_bar=minute_today.index[-1].to_pydatetime()
+            if not hits.empty:
+                first=hits.index[0]
+                extreme=hits.iloc[0].High if rising else hits.iloc[0].Low
+                st.success(f"条件成立：{first:%H:%M} JST開始の1分足で{'上抜け' if rising else '下抜け'}（足の{'高値' if rising else '安値'} {extreme:,.2f}円）。")
+            elif now_jst<deadline_dt:
+                st.info(f"判定待ち：{rule_deadline:%H:%M}までに{rule_price:,.2f}円を{'上抜け' if rising else '下抜け'}する条件は、取得済みの1分足では未確認です。")
+            elif last_bar>=deadline_dt-timedelta(minutes=1) and (now_jst-last_bar).total_seconds()<1200:
+                expected=pd.date_range(start=minute_today.index.min(),end=deadline_dt-timedelta(minutes=1),freq="min")
+                # Missing bars may be exchange breaks; do not claim complete tick coverage.
+                st.warning(f"期限到来・未達：{rule_deadline:%H:%M}までに条件成立を確認できませんでした（取得済み1分足に基づく暫定判定）。")
+            else:
+                st.warning("期限到来。ただし1分足が期限直前まで揃っていないため、未達と断定できません。")
+            st.caption(f"判定データ最終足：{last_bar:%Y/%m/%d %H:%M} JST｜現在：{now_jst:%H:%M} JST。画面を閉じている間の通知は行いません。")
     if intraday.empty:
         st.warning("この期間の分足データは取得できませんでした。期間や足種を変更してお試しください。")
     else:
