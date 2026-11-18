@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import yfinance as yf
 
-st.set_page_config(page_title="日経平均｜一目均衡表", page_icon="📈", layout="wide")
+st.set_page_config(page_title="株価｜一目均衡表", page_icon="📈", layout="wide")
 st.markdown("""<style>
 html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"], [data-testid="stSidebar"] {background-color:#050505!important;color:#f4f4f4!important}
 [data-testid="stAppViewContainer"] {background: #050505!important}
@@ -26,12 +26,25 @@ div[data-testid="stHorizontalBlock"] {gap:.4rem}
 [data-testid="stMetricDelta"] {font-size:.7rem}
 }
 </style>""",unsafe_allow_html=True)
-st.title("日経平均｜一目均衡表")
-st.caption("日足・週足 / 9・26・52 / 価格はYahoo Finance提供（遅延あり）")
+st.title("株価｜一目均衡表")
+st.caption("日経平均・東証個別銘柄 / 日足・週足・分足 / Yahoo Finance提供（遅延あり）")
+ticker_options={"日経平均":"^N225","トヨタ自動車（7203）":"7203.T","ソフトバンクグループ（9984）":"9984.T","任意の東証銘柄":"custom"}
+choice=st.selectbox("分析対象",list(ticker_options),key="ticker_choice")
+custom_code=st.text_input("証券コード（4桁）",value="7203",max_chars=4,key="custom_ticker") if choice=="任意の東証銘柄" else ""
+if choice=="任意の東証銘柄":
+    if not (custom_code.isascii() and custom_code.isdigit() and len(custom_code)==4):
+        st.error("東証の4桁の証券コードを入力してください。")
+        st.stop()
+    ticker=f"{custom_code}.T"
+    ticker_label=f"東証 {custom_code}"
+else:
+    ticker=ticker_options[choice]
+    ticker_label=choice
+st.caption(f"分析対象：{ticker_label}｜Yahoo Financeシンボル：{ticker}")
 
 @st.cache_data(ttl=900,show_spinner=False)
-def load_prices():
-    d=yf.download("^N225",start="2024-01-01",auto_adjust=False,progress=False,multi_level_index=False)
+def load_prices(symbol):
+    d=yf.download(symbol,start="2024-01-01",auto_adjust=False,progress=False,multi_level_index=False)
     if d is None or d.empty:
         raise RuntimeError("株価データを取得できません")
     d.index=pd.to_datetime(d.index).tz_localize(None).normalize()
@@ -48,7 +61,7 @@ def calc(d):
     return d
 
 try:
-    daily=load_prices()
+    daily=load_prices(ticker)
 except Exception as exc:
     st.error(f"データ取得エラー：{exc}")
     st.stop()
@@ -196,7 +209,7 @@ with st.expander("値幅観測論（3点入力）",expanded=False):
 
 with st.expander("データのダウンロード",expanded=False):
     st.download_button("CSVを保存",d.loc[d.index>=pd.Timestamp("2026-06-22")].to_csv(index_label="Date").encode("utf-8-sig"),
-        file_name="nikkei_ichimoku.csv",mime="text/csv")
+        file_name=f"{ticker.replace(chr(94),'index_').replace('.','_')}_ichimoku.csv",mime="text/csv")
 st.caption("免責：投資判断の参考資料です。場中の高安値到達時刻は日足データからは特定できません。")
 
 
@@ -210,8 +223,8 @@ interval_code={"1分足":"1m","5分足":"5m","15分足":"15m"}[intraday_interval
 period_code={"直近1日":"1d","直近5日":"5d","直近1か月":"1mo"}[intraday_period]
 
 @st.cache_data(ttl=55,show_spinner=False)
-def load_intraday(interval,period):
-    z=yf.download("^N225",period=period,interval=interval,auto_adjust=False,progress=False,multi_level_index=False,prepost=False)
+def load_intraday(symbol,interval,period):
+    z=yf.download(symbol,period=period,interval=interval,auto_adjust=False,progress=False,multi_level_index=False,prepost=False)
     if z is None or z.empty:
         return pd.DataFrame()
     z=z[["Open","High","Low","Close"]].dropna().sort_index()
@@ -227,8 +240,8 @@ from datetime import datetime, time as clock_time, timedelta
 from zoneinfo import ZoneInfo
 
 st.subheader("価格・期限の自動判定")
-st.caption("例：当日11:00までに59,200円を上抜ける。判定には1分足を使用し、表示中の5分足・15分足とは独立して計算します。")
-rule_price=st.number_input("突破価格（円）",min_value=0.01,value=59200.0,step=10.0,format="%.2f",key="rule_price")
+st.caption("例：日経平均が当日11:00までに59,200円を上抜ける。判定は選択銘柄の1分足を使用します。")
+rule_price=st.number_input("突破価格（円）",min_value=0.01,value=59200.0 if ticker=="^N225" else round(float(daily.Close.iloc[-1]),2),step=10.0,format="%.2f",key="rule_price")
 rule_deadline=st.time_input("判定期限（日本時間）",value=clock_time(11,0),step=60,key="rule_deadline")
 rule_direction=st.radio("判定条件",["上抜け（高値が指定価格を超える）","下抜け（安値が指定価格を下回る）"],horizontal=True,key="rule_direction")
 st.caption("判定対象は最新の取引日。期限ちょうどに始まる足は対象外です。場中データには遅延・欠損の可能性があります。")
@@ -240,9 +253,9 @@ if st.button("分足データを今すぐ再取得",key="force_intraday_refresh"
 @st.fragment(run_every="60s" if st.session_state.intraday_autorefresh else None)
 def render_intraday_live():
     with st.spinner("分足を取得しています"):
-        intraday=load_intraday(interval_code,period_code)
+        intraday=load_intraday(ticker,interval_code,period_code)
     # Use 1-minute data regardless of the selected chart interval.
-    minute=intraday if interval_code=="1m" else load_intraday("1m","5d")
+    minute=intraday if interval_code=="1m" else load_intraday(ticker,"1m","5d")
     now_jst=datetime.now(ZoneInfo("Asia/Tokyo"))
     if minute.empty:
         st.warning("転換条件：1分足を取得できず判定不能です。")
@@ -314,7 +327,7 @@ def render_intraday_live():
             intraday_fig.add_trace(go.Scatter(x=idata.index,y=idata.tenkan,name="分足転換線",line=dict(color="rgba(249,208,0,.75)",width=1.3)))
             intraday_fig.add_trace(go.Scatter(x=idata.index,y=idata.kijun,name="分足基準線",line=dict(color="rgba(36,198,207,.75)",width=1.3)))
         intraday_fig.add_trace(go.Candlestick(x=chart_bars.index,open=chart_bars.Open,high=chart_bars.High,low=chart_bars.Low,close=chart_bars.Close,
-            name="日経平均（分足）",increasing_line_color="#00d34f",decreasing_line_color="#ff3b20",
+            name=f"{ticker_label}（分足）",increasing_line_color="#00d34f",decreasing_line_color="#ff3b20",
             increasing_fillcolor="#00d34f",decreasing_fillcolor="#ff3b20"))
         intraday_fig.add_hline(y=target,line_color="#f5c400",line_dash="dash",line_width=1.2)
         intraday_fig.update_layout(template="plotly_dark",height=510,margin=dict(l=0,r=8,t=8,b=10),
@@ -333,14 +346,14 @@ def render_intraday_live():
         st.plotly_chart(intraday_fig,use_container_width=True,key="intraday_chart",config={"displaylogo":False,"scrollZoom":False,"modeBarButtonsToRemove":["lasso2d","select2d"]})
         st.caption("価格到達時刻は足の開始時刻です。足の中で実際に約定した秒・分までは特定できません。5分足なら最大5分、15分足なら最大15分の幅があります。")
         st.caption("指定価格を含む足はOHLCの範囲判定です。ギャップや気配・データ欠損などで実際の取引成立を保証しません。")
-        st.download_button("分足CSV（JST）を保存",intraday.to_csv(index_label="JST").encode("utf-8-sig"),file_name=f"nikkei_{interval_code}_jst.csv",mime="text/csv")
+        st.download_button("分足CSV（JST）を保存",intraday.to_csv(index_label="JST").encode("utf-8-sig"),file_name=f"{ticker.replace(chr(94),'index_').replace('.','_')}_{interval_code}_jst.csv",mime="text/csv")
 
 render_intraday_live()
-st.caption("Yahoo Financeの直近分足に加え、GitHub Actionsによる1分足の継続保存を設定しています。保存は外部データの取得・ワークフロー実行状況に依存します。")
+st.caption("Yahoo Financeの直近分足を表示。GitHub Actionsによる継続保存は日経平均のみ対象で、個別銘柄はまだ保存していません。")
 
 from pathlib import Path
 archive_index = Path(__file__).parent / "data" / "daily_extrema.csv"
-st.subheader("蓄積した1分足データ")
+st.subheader("蓄積した日経平均の1分足データ")
 if archive_index.exists():
     extrema = pd.read_csv(archive_index)
     if not extrema.empty:
