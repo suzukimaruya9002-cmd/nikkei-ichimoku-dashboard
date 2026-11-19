@@ -227,7 +227,7 @@ def load_intraday(symbol,interval,period):
     z=yf.download(symbol,period=period,interval=interval,auto_adjust=False,progress=False,multi_level_index=False,prepost=False)
     if z is None or z.empty:
         return pd.DataFrame()
-    z=z[["Open","High","Low","Close"]].dropna().sort_index()
+    z=z[[c for c in ["Open","High","Low","Close","Volume"] if c in z.columns]].dropna(subset=["Open","High","Low","Close"]).sort_index()
     idx=pd.to_datetime(z.index)
     if idx.tz is None:
         idx=idx.tz_localize("Asia/Tokyo")
@@ -315,42 +315,69 @@ def render_intraday_live():
         else:
             st.info("取得期間中に指定価格へ到達した足はありません。")
 
-        # Plot only one selected trading session by default, eliminating large overnight/weekend gaps.
+        # Continuous trading-bar categories: no overnight or lunch-break gaps.
         available_days=sorted(intraday.index.strftime("%Y-%m-%d").unique(),reverse=True)
-        selected_day=st.selectbox("チャート表示日",available_days,index=0,key=f"intraday_chart_day_{ticker}")
-        chart_bars=intraday[intraday.index.strftime("%Y-%m-%d")==selected_day]
-        st.caption(f"表示：{selected_day}｜{len(chart_bars)}本のローソク足。過去の高値・安値集計は選択した取得期間全体を対象とします。")
-        show_intraday_ichimoku=st.checkbox("分足の一目均衡表（9・26・52）を表示",False)
-        intraday_fig=go.Figure()
+        day_count=st.segmented_control("分足チャートの表示範囲",["当日","直近2営業日","直近5営業日"],default="直近2営業日",key=f"chart_range_{ticker}_{interval_code}")
+        requested={"当日":1,"直近2営業日":2,"直近5営業日":5}[day_count]
+        display_days=set(available_days[:requested])
+        chart_bars=intraday[intraday.index.strftime("%Y-%m-%d").isin(display_days)].copy()
+        st.caption(f"表示：{len(display_days)}営業日・{len(chart_bars)}本｜夜間・昼休みは詰めて表示。チャートを指で左右に移動・拡大できます。")
+        show_intraday_ichimoku=st.checkbox("分足の一目均衡表・雲を表示",value=True,key=f"intraday_ichimoku_{ticker}")
+        show_intraday_cloud=st.checkbox("先行スパン1・2の雲",value=True,key=f"intraday_cloud_{ticker}",disabled=not show_intraday_ichimoku)
+        show_intraday_volume=st.checkbox("出来高を表示（個別株）",value=True,key=f"intraday_volume_{ticker}",disabled=ticker=="^N225")
+        from plotly.subplots import make_subplots
+        use_volume=show_intraday_volume and ticker!="^N225" and "Volume" in intraday.columns
+        intraday_fig=make_subplots(rows=2 if use_volume else 1,cols=1,shared_xaxes=True,
+            row_heights=[0.77,0.23] if use_volume else [1],vertical_spacing=0.035)
+        xs=chart_bars.index.strftime("%m/%d %H:%M").tolist()
         if show_intraday_ichimoku:
-            idata=calc(intraday).loc[chart_bars.index]
-            intraday_fig.add_trace(go.Scatter(x=idata.index,y=idata.tenkan,name="分足転換線",line=dict(color="rgba(249,208,0,.75)",width=1.3)))
-            intraday_fig.add_trace(go.Scatter(x=idata.index,y=idata.kijun,name="分足基準線",line=dict(color="rgba(36,198,207,.75)",width=1.3)))
-        intraday_fig.add_trace(go.Candlestick(x=chart_bars.index,open=chart_bars.Open,high=chart_bars.High,low=chart_bars.Low,close=chart_bars.Close,
-            name=f"{ticker_label}（分足）",increasing_line_color="#00d34f",decreasing_line_color="#ff3b20",
-            increasing_fillcolor="#00d34f",decreasing_fillcolor="#ff3b20"))
+            full_ichi=calc(intraday)
+            ichi=full_ichi.loc[chart_bars.index]
+            if show_intraday_cloud:
+                # Shifted cloud is plotted at its observed bar positions; future projection is not fabricated.
+                cloud_a=ichi.cloud_a
+                cloud_b=ichi.cloud_b
+                intraday_fig.add_trace(go.Scatter(x=xs,y=cloud_a,name="先行スパン1",
+                    line=dict(color="rgba(50,193,105,.60)",width=1),hoverinfo="skip"),row=1,col=1)
+                intraday_fig.add_trace(go.Scatter(x=xs,y=cloud_b,name="先行スパン2",
+                    line=dict(color="rgba(255,92,92,.60)",width=1),
+                    fill="tonexty",fillcolor="rgba(70,170,120,.12)",hoverinfo="skip"),row=1,col=1)
+            intraday_fig.add_trace(go.Scatter(x=xs,y=ichi.tenkan,name="転換線（9）",
+                line=dict(color="#f5d000",width=1.4)),row=1,col=1)
+            intraday_fig.add_trace(go.Scatter(x=xs,y=ichi.kijun,name="基準線（26）",
+                line=dict(color="#27d6e4",width=1.5)),row=1,col=1)
+        intraday_fig.add_trace(go.Candlestick(x=xs,open=chart_bars.Open,high=chart_bars.High,
+            low=chart_bars.Low,close=chart_bars.Close,name=f"{ticker_label}（{intraday_interval}）",
+            increasing_line_color="#00d34f",decreasing_line_color="#ff3b20",
+            increasing_fillcolor="#00d34f",decreasing_fillcolor="#ff3b20"),row=1,col=1)
         session_low=float(chart_bars.Low.min())
         session_high=float(chart_bars.High.max())
         session_span=max(session_high-session_low,session_high*0.002,1.0)
         if session_low-0.5*session_span <= target <= session_high+0.5*session_span:
-            intraday_fig.add_hline(y=target,line_color="#f5c400",line_dash="dash",line_width=1.2)
-        else:
-            st.caption(f"重要価格 {target:,.2f}円は表示レンジから離れているため、チャート上の線を省略しています。")
-        intraday_fig.update_yaxes(range=[session_low-0.12*session_span,session_high+0.12*session_span])
-        intraday_fig.update_layout(template="plotly_dark",height=510,margin=dict(l=0,r=8,t=8,b=10),
-            paper_bgcolor="#050505",plot_bgcolor="#050505",font=dict(color="#eeeeee"),
+            intraday_fig.add_hline(y=target,line_color="#f5c400",line_dash="dash",
+                line_width=1.2,row=1,col=1)
+        if use_volume:
+            colors=["#00d34f" if c>=o else "#ff3b20" for o,c in zip(chart_bars.Open,chart_bars.Close)]
+            intraday_fig.add_trace(go.Bar(x=xs,y=chart_bars.Volume,name="出来高",
+                marker_color=colors,opacity=.8),row=2,col=1)
+            intraday_fig.update_yaxes(side="right",row=2,col=1)
+        intraday_fig.update_yaxes(range=[session_low-0.12*session_span,session_high+0.12*session_span],
+            side="right",tickformat=",.0f",gridcolor="rgba(145,145,160,.22)",row=1,col=1)
+        tickstep=max(1,len(xs)//6)
+        intraday_fig.update_xaxes(type="category",tickmode="array",
+            tickvals=xs[::tickstep],ticktext=xs[::tickstep],
+            showgrid=True,gridcolor="rgba(145,145,160,.16)")
+        intraday_fig.update_layout(template="plotly_dark",height=620 if use_volume else 530,
+            margin=dict(l=0,r=8,t=12,b=12),paper_bgcolor="#050505",
+            plot_bgcolor="#050505",font=dict(color="#eeeeee",size=12),
             xaxis_rangeslider_visible=False,hovermode="x unified",
-            xaxis=dict(type="category",showgrid=True,gridcolor="rgba(145,145,160,.22)",nticks=6,tickangle=0),
-            yaxis=dict(side="right",tickformat=",.0f",gridcolor="rgba(145,145,160,.22)"),
-            legend=dict(orientation="h",y=-.25,x=0))
-        # String category positions remove non-trading time, preserving consistent candle spacing.
-        intraday_fig.update_traces(x=chart_bars.index.strftime("%H:%M").tolist(),selector=dict(type="candlestick"))
-        if show_intraday_ichimoku:
-            intraday_fig.update_traces(x=chart_bars.index.strftime("%H:%M").tolist(),selector=dict(type="scatter"))
-        intraday_fig.update_xaxes(tickmode="array",
-            tickvals=chart_bars.index.strftime("%H:%M").tolist()[::max(1,len(chart_bars)//5)],
-            ticktext=chart_bars.index.strftime("%H:%M").tolist()[::max(1,len(chart_bars)//5)])
-        st.plotly_chart(intraday_fig,use_container_width=True,key="intraday_chart",config={"displaylogo":False,"scrollZoom":False,"modeBarButtonsToRemove":["lasso2d","select2d"]})
+            legend=dict(orientation="h",y=-.16,x=0,font=dict(size=10)),
+            dragmode="pan")
+        st.plotly_chart(intraday_fig,use_container_width=True,
+            key=f"intraday_chart_{ticker}_{interval_code}",
+            config={"displaylogo":False,"scrollZoom":False,
+                "modeBarButtonsToRemove":["lasso2d","select2d"]})
+        st.caption("雲は実測済みの足に対応する先行スパン1・2を表示。将来26本先の予測雲は表示していません。")
         st.caption("価格到達時刻は足の開始時刻です。足の中で実際に約定した秒・分までは特定できません。5分足なら最大5分、15分足なら最大15分の幅があります。")
         st.caption("指定価格を含む足はOHLCの範囲判定です。ギャップや気配・データ欠損などで実際の取引成立を保証しません。")
         st.download_button("分足CSV（JST）を保存",intraday.to_csv(index_label="JST").encode("utf-8-sig"),file_name=f"{ticker.replace(chr(94),'index_').replace('.','_')}_{interval_code}_jst.csv",mime="text/csv")
