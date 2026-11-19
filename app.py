@@ -218,7 +218,7 @@ st.subheader("分単位の時間・価格分析")
 st.caption("日足・週足の一目均衡表とは別に、場中の価格到達時刻を調べます。時刻は日本時間（JST）です。")
 intraday_interval=st.segmented_control("分足",["1分足","5分足","15分足"],default="5分足")
 period_options={"1分足":["直近1日","直近5日"],"5分足":["直近1日","直近5日","直近1か月"],"15分足":["直近1日","直近5日","直近1か月"]}
-intraday_period=st.selectbox("分足の取得期間",period_options[intraday_interval],key="intraday_period")
+intraday_period=st.selectbox("分足の取得期間",period_options[intraday_interval],index=period_options[intraday_interval].index("直近5日"),key=f"intraday_period_{ticker}_{intraday_interval}")
 interval_code={"1分足":"1m","5分足":"5m","15分足":"15m"}[intraday_interval]
 period_code={"直近1日":"1d","直近5日":"5d","直近1か月":"1mo"}[intraday_period]
 
@@ -322,6 +322,8 @@ def render_intraday_live():
         display_days=set(available_days[:requested])
         chart_bars=intraday[intraday.index.strftime("%Y-%m-%d").isin(display_days)].copy()
         st.caption(f"表示：{len(display_days)}営業日・{len(chart_bars)}本｜夜間・昼休みは詰めて表示。チャートを指で左右に移動・拡大できます。")
+        if requested>len(available_days):
+            st.info("指定した営業日数を表示するには、取得期間を「直近5日」以上にしてください。")
         show_intraday_ichimoku=st.checkbox("分足の一目均衡表・雲を表示",value=True,key=f"intraday_ichimoku_{ticker}")
         show_intraday_cloud=st.checkbox("先行スパン1・2の雲",value=True,key=f"intraday_cloud_{ticker}",disabled=not show_intraday_ichimoku)
         show_intraday_volume=st.checkbox("出来高を表示（個別株）",value=True,key=f"intraday_volume_{ticker}",disabled=ticker=="^N225")
