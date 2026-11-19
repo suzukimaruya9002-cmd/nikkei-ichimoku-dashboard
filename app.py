@@ -241,7 +241,7 @@ from zoneinfo import ZoneInfo
 
 st.subheader("価格・期限の自動判定")
 st.caption("例：日経平均が当日11:00までに59,200円を上抜ける。判定は選択銘柄の1分足を使用します。")
-rule_price=st.number_input("突破価格（円）",min_value=0.01,value=59200.0 if ticker=="^N225" else round(float(daily.Close.iloc[-1]),2),step=10.0,format="%.2f",key="rule_price")
+rule_price=st.number_input("突破価格（円）",min_value=0.01,value=59200.0 if ticker=="^N225" else round(float(daily.Close.iloc[-1]),2),step=10.0,format="%.2f",key=f"rule_price_{ticker}")
 rule_deadline=st.time_input("判定期限（日本時間）",value=clock_time(11,0),step=60,key="rule_deadline")
 rule_direction=st.radio("判定条件",["上抜け（高値が指定価格を超える）","下抜け（安値が指定価格を下回る）"],horizontal=True,key="rule_direction")
 st.caption("判定対象は最新の取引日。期限ちょうどに始まる足は対象外です。場中データには遅延・欠損の可能性があります。")
@@ -301,7 +301,7 @@ def render_intraday_live():
         cc2.metric("期間安値",f"{intraday.Low.min():,.2f} 円")
         cc2.caption(f"{lidx:%m/%d %H:%M} JST の足")
 
-        target=st.number_input("追跡する重要価格（円）",min_value=0.0,value=round(float(last.Close),2),step=10.0,format="%.2f",key="intraday_target")
+        target=st.number_input("追跡する重要価格（円）",min_value=0.0,value=round(float(last.Close),2),step=10.0,format="%.2f",key=f"intraday_target_{ticker}")
         touched=intraday[(intraday.Low<=target)&(intraday.High>=target)]
         above_target=intraday[intraday.High>=target]
         below_target=intraday[intraday.Low<=target]
@@ -317,7 +317,7 @@ def render_intraday_live():
 
         # Plot only one selected trading session by default, eliminating large overnight/weekend gaps.
         available_days=sorted(intraday.index.strftime("%Y-%m-%d").unique(),reverse=True)
-        selected_day=st.selectbox("チャート表示日",available_days,index=0,key="intraday_chart_day")
+        selected_day=st.selectbox("チャート表示日",available_days,index=0,key=f"intraday_chart_day_{ticker}")
         chart_bars=intraday[intraday.index.strftime("%Y-%m-%d")==selected_day]
         st.caption(f"表示：{selected_day}｜{len(chart_bars)}本のローソク足。過去の高値・安値集計は選択した取得期間全体を対象とします。")
         show_intraday_ichimoku=st.checkbox("分足の一目均衡表（9・26・52）を表示",False)
@@ -329,7 +329,14 @@ def render_intraday_live():
         intraday_fig.add_trace(go.Candlestick(x=chart_bars.index,open=chart_bars.Open,high=chart_bars.High,low=chart_bars.Low,close=chart_bars.Close,
             name=f"{ticker_label}（分足）",increasing_line_color="#00d34f",decreasing_line_color="#ff3b20",
             increasing_fillcolor="#00d34f",decreasing_fillcolor="#ff3b20"))
-        intraday_fig.add_hline(y=target,line_color="#f5c400",line_dash="dash",line_width=1.2)
+        session_low=float(chart_bars.Low.min())
+        session_high=float(chart_bars.High.max())
+        session_span=max(session_high-session_low,session_high*0.002,1.0)
+        if session_low-0.5*session_span <= target <= session_high+0.5*session_span:
+            intraday_fig.add_hline(y=target,line_color="#f5c400",line_dash="dash",line_width=1.2)
+        else:
+            st.caption(f"重要価格 {target:,.2f}円は表示レンジから離れているため、チャート上の線を省略しています。")
+        intraday_fig.update_yaxes(range=[session_low-0.12*session_span,session_high+0.12*session_span])
         intraday_fig.update_layout(template="plotly_dark",height=510,margin=dict(l=0,r=8,t=8,b=10),
             paper_bgcolor="#050505",plot_bgcolor="#050505",font=dict(color="#eeeeee"),
             xaxis_rangeslider_visible=False,hovermode="x unified",
