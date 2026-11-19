@@ -28,7 +28,7 @@ div[data-testid="stHorizontalBlock"] {gap:.4rem}
 </style>""",unsafe_allow_html=True)
 st.title("株価｜一目均衡表")
 st.caption("日経平均・東証個別銘柄 / 日足・週足・分足 / Yahoo Finance提供（遅延あり）")
-ticker_options={"日経平均":"^N225","トヨタ自動車（7203）":"7203.T","ソフトバンクグループ（9984）":"9984.T","任意の東証銘柄":"custom"}
+ticker_options={"日経平均":"^N225","トヨタ自動車（7203）":"7203.T","イビデン（4062）":"4062.T","ソフトバンクグループ（9984）":"9984.T","任意の東証銘柄":"custom"}
 choice=st.selectbox("分析対象",list(ticker_options),key="ticker_choice")
 custom_code=st.text_input("証券コード（4桁）",value="7203",max_chars=4,key="custom_ticker") if choice=="任意の東証銘柄" else ""
 if choice=="任意の東証銘柄":
